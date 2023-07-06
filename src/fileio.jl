@@ -8,7 +8,7 @@ const LENGTH_UNIT = u"Å"
 const FORCE_UNIT = u"Eh_au" / u"Å"
 const KNOWN_PERIODIC_KEYWORDS = ("PRIMVEC", "CONVVEC", "PRIMCOORD", "CONVCOORD")
 
-# Cound the number of boundary conditions which are AtomsBase.Periodic
+# Count the number of boundary conditions which are AtomsBase.Periodic
 function count_periodic_bcs(system::AbstractSystem)
     return count(Base.Fix2(isa, Periodic), boundary_conditions(system))
 end
@@ -184,11 +184,13 @@ function write_atom(io::IO, atom)
     end
 end
 
+# Write the atomic numbers, positions[, forces] of an ATOMS block or [PRIM,CONV]COORD block
 function write_atoms(io::IO, system::AbstractSystem; header="")
     !isempty(header) && println(io, strip(header))
     return map(Base.Fix1(write_atom, io), system[:])
 end
 
+# Write a bounding box block (optionally with a header, i.e. PRIMVEC or CONVVEC)
 function write_bounding_box(io::IO, system::AbstractSystem; header="")
     !isempty(header) && println(io, strip(header))
     for i in 1:3
@@ -197,6 +199,8 @@ function write_bounding_box(io::IO, system::AbstractSystem; header="")
     end
 end
 
+# Write the PRIMVEC, CONVVEC, and PRIMCOORD blocks which make up a frame of a
+# periodic trajectory
 function write_periodic_frame(io::IO, system::AbstractSystem; frame="")
     n_atoms = length(system)
     write_bounding_box(io, system; header="PRIMVEC $(frame)")
@@ -204,6 +208,7 @@ function write_periodic_frame(io::IO, system::AbstractSystem; frame="")
     write_atoms(io, system; header="PRIMCOORD $(frame)\n$(n_atoms) 1")
 end
 
+# Write an ATOMS frame or periodic frame depending on the periodicity of the system
 function write_frame(io::IO, system::AbstractSystem; frame="")
     if count_periodic_bcs(system) == 0
         write_atoms(io, system; header="ATOMS $(frame)")
@@ -213,7 +218,9 @@ function write_frame(io::IO, system::AbstractSystem; frame="")
 end
 
 function save_xsf(io::IO, system::AbstractSystem)
+    # Write the system type line for periodic systems (not needed for ATOMS)
     count_periodic_bcs(system) > 0 && write_system_type(io, n_periodic_bcs)
+    # Write the rest of the data
     write_frame(io, system)
 end
 
