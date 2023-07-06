@@ -170,7 +170,8 @@ load_xsf(file::Union{AbstractString,IOStream}) = load_xsf(Float64, file)
 
 function write_system_type(io::IO, n_periodic_bcs::Int)
     types = Dict{Int,String}(1 => "POLYMER", 2 => "SLAB", 3 => "CRYSTAL")
-    return println(io, types[n_periodic_bcs])
+    println(io, types[n_periodic_bcs])
+    return nothing
 end
 
 function write_atom(io::IO, atom)
@@ -182,6 +183,7 @@ function write_atom(io::IO, atom)
     else
         @printf io "%3d %20.14f %20.14f %20.14f\n" n x y z
     end
+    return nothing
 end
 
 # Write the atomic numbers, positions[, forces] of an ATOMS block or [PRIM,CONV]COORD block
@@ -197,6 +199,7 @@ function write_bounding_box(io::IO, system::AbstractSystem; header="")
         x, y, z = ustrip(uconvert.(LENGTH_UNIT, bounding_box(system)[i]))
         @printf io "%20.14f %20.14f %20.14f\n" x y z
     end
+    return nothing
 end
 
 # Write the PRIMVEC, CONVVEC, and PRIMCOORD blocks which make up a frame of a
@@ -206,6 +209,7 @@ function write_periodic_frame(io::IO, system::AbstractSystem; frame="")
     write_bounding_box(io, system; header="PRIMVEC $(frame)")
     write_bounding_box(io, system; header="CONVVEC $(frame)")
     write_atoms(io, system; header="PRIMCOORD $(frame)\n$(n_atoms) 1")
+    return nothing
 end
 
 # Write an ATOMS frame or periodic frame depending on the periodicity of the system
@@ -215,6 +219,7 @@ function write_frame(io::IO, system::AbstractSystem; frame="")
     else
         write_periodic_frame(io, system; frame)
     end
+    return nothing
 end
 
 function save_xsf(io::IO, system::AbstractSystem)
@@ -222,6 +227,7 @@ function save_xsf(io::IO, system::AbstractSystem)
     count_periodic_bcs(system) > 0 && write_system_type(io, n_periodic_bcs)
     # Write the rest of the data
     write_frame(io, system)
+    return nothing
 end
 
 function save_xsf(io::IO, frames::AbstractVector{<:AbstractSystem})
@@ -235,10 +241,12 @@ function save_xsf(io::IO, frames::AbstractVector{<:AbstractSystem})
             write_frame(io, frames[i]; frame=i)
         end
     end
+    return nothing
 end
 
 function save_xsf(file::AbstractString, frames::AbstractVector{<:AbstractSystem})
     open(file, "w") do io
         save_xsf(io, frames)
     end
+    return nothing
 end
