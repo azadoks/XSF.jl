@@ -1,4 +1,4 @@
-# XSF.jl
+# XCrySDenStructureFormat.jl
 
 This package provides read / write functionality for [XCrySDen XSF](http://www.xcrysden.org/doc/XSF.html) atomic structure files.
 
@@ -24,11 +24,11 @@ Currently does _not_ support
 This package is registered in the General registry, so installation of the latest stable release is as simple as pressing `]` to enter `pkg>` mode in the Julia REPL, and then entering:
 
 ```julia
-pkg> add XSF
+pkg> add XCrySDenStructureFormat
 ```
 
 or for the development version:
 
 ```julia
-pkg> dev https://github.com/azadoks/XSF.jl
+pkg> dev https://github.com/azadoks/XCrySDenStructureFormat.jl
 ```

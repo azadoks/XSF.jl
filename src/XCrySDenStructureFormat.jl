@@ -1,4 +1,4 @@
-module XSF
+module XCrySDenStructureFormat
 
 export load_xsf
 export save_xsf

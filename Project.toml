@@ -1,4 +1,4 @@
-name = "XSF"
+name = "XCrySDenStructureFormat"
 uuid = "02310045-4665-40c9-a658-98c497d2eca9"
 authors = ["Austin Zadoks <austin.zadoks@protonmail.com>"]
 version = "0.1.0"
