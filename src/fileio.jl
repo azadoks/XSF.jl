@@ -163,7 +163,7 @@ function load_xsf(T::Type{<:Real}, file::Union{AbstractString,IOStream})
             push!(frames, parse_periodic_frame(T, lines, bcs, previous_frame))
         end
     end
-    return frames
+    return length(frames) == 1 ? only(frames) : frames
 end
 # Set a default floating-point type of Float64
 load_xsf(file::Union{AbstractString,IOStream}) = load_xsf(Float64, file)
