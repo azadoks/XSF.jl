@@ -1,16 +1,49 @@
-using AtomsBase
-using Unitful
-using UnitfulAtomic
-using Printf
-using PeriodicTable: PeriodicTable
-
-const LENGTH_UNIT = u"Å"
-const FORCE_UNIT = u"Eh_au" / u"Å"
 const KNOWN_PERIODIC_KEYWORDS = ("PRIMVEC", "CONVVEC", "PRIMCOORD", "CONVCOORD")
 
 # Count the number of boundary conditions which are AtomsBase.Periodic
-function count_periodic_bcs(system::AbstractSystem)
-    return count(Base.Fix2(isa, Periodic), boundary_conditions(system))
+function count_periodic_bcs(bcs::AbstractVector{<:BoundaryCondition})
+    return count(Base.Fix2(isa, Periodic), bcs)
+end
+count_periodic_bcs(system::AbstractSystem) = count_periodic_bcs(boundary_conditions(system))
+
+function check_system_properties(system::AbstractSystem)
+    system_keys = keys(system)
+    for key in system_keys
+        if !in(key, (:bounding_box, :boundary_conditions,))
+            @warn "Ignoring unsupported property $(key)"
+        end
+    end
+end
+
+function check_atom_properties(atom::Atom)
+    atom_keys = keys(atom)
+    for key in atom_keys
+        if !in(key, (:atomic_symbol, :atomic_number, :atomic_mass, :position, :force,))
+            @warn "Ignoring unsupported atomic property $(key)"
+        end
+    end
+end
+
+function check_atomic_mass(atom::Atom)
+    if haskey(PeriodicTable.elements, atomic_symbol(atom))
+        if atomic_mass(atom) != PeriodicTable.elements[atomic_symbol(atom)].atomic_mass
+            @warn "Atom atomic_mass in XSF cannot be mutated"
+        end
+    end
+end
+
+function check_atomic_symbol(atom::Atom)
+    if atomic_symbol(atom) != Symbol(PeriodicTable.elements[atomic_number(atom)].symbol)
+        @warn "Atom atomic_symbol in XSF must agree with atomic_mass"
+    end
+end
+
+function check_system(system::AbstractSystem)
+    check_system_properties(system)
+    check_atom_properties.(system)
+    check_atomic_mass.(system)
+    check_atomic_symbol.(system)
+    return nothing
 end
 
 # Custom version of `iterate(::Base.EachLine)` which cleans lines for parsing
@@ -93,7 +126,8 @@ function parse_periodic_frame(T::Type{<:Real}, lines, bcs, previous_frame)
     i = 0
     io_pos = position(lines.stream)
     blocks = Dict()
-    while should_parse && i <= 4  # Maximum 4 blocks (PRIMVEC, PRIMCOORD, CONVVEC, CONVCOORD)
+    # Maximum 4 blocks (PRIMVEC, PRIMCOORD, CONVVEC, CONVCOORD)
+    while should_parse && i <= 4
         line = iterate_xsf(lines)
         if isnothing(line)  # We've reached the end of the file
             should_parse = false
@@ -148,7 +182,12 @@ function load_xsf(T::Type{<:Real}, file::Union{AbstractString,IOStream})
     else
         n_frames = 1
     end
-    bcs = parse_boundary_conditions(line)
+    bcs = BoundaryCondition[]
+    try
+        bcs = parse_boundary_conditions(line)
+    catch
+        return []
+    end
     frames = AbstractSystem{3}[]
     for _ in 1:n_frames
         # Check how many boundary conditions are Periodic to determine whether we have
@@ -163,7 +202,7 @@ function load_xsf(T::Type{<:Real}, file::Union{AbstractString,IOStream})
             push!(frames, parse_periodic_frame(T, lines, bcs, previous_frame))
         end
     end
-    return length(frames) == 1 ? only(frames) : frames
+    return frames
 end
 # Set a default floating-point type of Float64
 load_xsf(file::Union{AbstractString,IOStream}) = load_xsf(Float64, file)
@@ -176,12 +215,12 @@ end
 
 function write_atom(io::IO, atom)
     n = atomic_number(atom)
-    x, y, z = ustrip(uconvert.(LENGTH_UNIT, position(atom)))
+    x, y, z = ustrip.(uconvert.(LENGTH_UNIT, position(atom)))
     if haskey(atom, :force)
-        fx, fy, fz = ustrip(uconvert.(FORCE_UNIT, get(atom, :force, nothing)))
-        @printf io "%3d %20.14f %20.14f %20.14f %20.14f %20.14f %20.14f\n" n x y z fx fy fz
+        fx, fy, fz = ustrip.(uconvert.(FORCE_UNIT, get(atom, :force, nothing)))
+        println(io, "$(n) $(x) $(y) $(z) $(fx) $(fy) $(fz)")
     else
-        @printf io "%3d %20.14f %20.14f %20.14f\n" n x y z
+        println(io, "$(n) $(x) $(y) $(z)")
     end
     return nothing
 end
@@ -196,8 +235,8 @@ end
 function write_bounding_box(io::IO, system::AbstractSystem; header="")
     !isempty(header) && println(io, strip(header))
     for i in 1:3
-        x, y, z = ustrip(uconvert.(LENGTH_UNIT, bounding_box(system)[i]))
-        @printf io "%20.14f %20.14f %20.14f\n" x y z
+        x, y, z = ustrip.(uconvert.(LENGTH_UNIT, bounding_box(system)[i]))
+        println(io, "$(x) $(y) $(z)")
     end
     return nothing
 end
@@ -213,6 +252,8 @@ function write_periodic_frame(io::IO, system::AbstractSystem; frame="")
 end
 
 # Write an ATOMS frame or periodic frame depending on the periodicity of the system
+# This function is used for writing the frames of animated files (not for single
+# structures).
 function write_frame(io::IO, system::AbstractSystem; frame="")
     if count_periodic_bcs(system) == 0
         write_atoms(io, system; header="ATOMS $(frame)")
@@ -222,31 +263,32 @@ function write_frame(io::IO, system::AbstractSystem; frame="")
     return nothing
 end
 
-function save_xsf(io::IO, system::AbstractSystem)
-    # Write the system type line for periodic systems (not needed for ATOMS)
-    count_periodic_bcs(system) > 0 && write_system_type(io, n_periodic_bcs)
-    # Write the rest of the data
-    write_frame(io, system)
-    return nothing
-end
-
 function save_xsf(io::IO, frames::AbstractVector{<:AbstractSystem})
-    if length(frames) == 1
-        # If we get a single frame, just write it as a bare structure (not as an animation)
-        return save_xsf(io, only(frames))
-    else
-        # Otherwise, we write the animation line followed by each frame in sequence
-        println(io, "ANIMSTEPS $(length(frames))")
-        for i in eachindex(frames)
-            write_frame(io, frames[i]; frame=i)
-        end
+    # Check the frames and warn about unsupported properties.
+    check_system.(frames)
+    # Make sure all structures have the same boundary conditions and get those boundary
+    # conditions.
+    bcs = only(unique(boundary_conditions.(frames)))
+    # Count the number of periodic boundary conditions.
+    n_periodic_bcs = count(Base.Fix2(isa, Periodic), bcs)
+    # Write the animation line if more than one frame is provided.
+    is_animated = length(frames) > 1
+    is_animated && println(io, "ANIMSTEPS $(length(frames))")
+    # For periodic systems, write the system type line.
+    n_periodic_bcs > 0 && write_system_type(io, n_periodic_bcs)
+    # Write the structural and force information for each frame.
+    for i in eachindex(frames)
+        write_frame(io, frames[i], frame=is_animated ? i : "")
     end
     return nothing
 end
 
 function save_xsf(file::AbstractString, frames::AbstractVector{<:AbstractSystem})
     open(file, "w") do io
-        save_xsf(io, frames)
+        return save_xsf(io, frames)
     end
-    return nothing
+end
+
+function save_xsf(file_or_io::Union{IO, AbstractString}, frame::AbstractSystem)
+    return save_xsf(file_or_io, [frame])
 end
