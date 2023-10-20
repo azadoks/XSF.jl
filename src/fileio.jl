@@ -102,6 +102,53 @@ function parse_coord_block(T::Type{<:Real}, lines)
     end
 end
 
+function parse_data_grid(T::Type{<:Real}, lines, N)
+    # Grid shape
+    shape = NTuple{N,Int}(parse.(Int, split(iterate_xsf(lines))))
+    length(shape) == N || error(
+        "Datagrid dimension $(N) does not agree with shape of the grid $(shape)."
+    )
+    # Grid origin
+    origin = parse.(T, split(iterate_xsf(lines)))
+    # "Span vectors"
+    span_vecs = map(1:N) do _
+        parse.(T, split(iterate_xsf(lines)))
+    end
+    # Data
+    data = zeros(T, shape)
+    idx = 1
+    while idx <= prod(shape)
+        line_data = parse.(T, split(iterate_xsf(lines)))
+        n_col = length(line_data)
+        data[idx:(idx + n_col - 1)] .= line_data
+        idx += n_col
+    end
+    # Check the END_DATAGRID_[N]D line
+    line = iterate_xsf(lines)
+    expectation = "END_DATAGRID_$(N)D"
+    startswith(line, expectation) || error(
+        "Expected data grid to end with line $(expectation), found $(line)."
+    )
+    return (; origin, span_vecs, data)
+end
+
+function parse_data_grid_block(T::Type{<:Real}, lines, N)
+    identifier = iterate_xsf(lines)  # Identifier (comment) line
+    data_grids = []
+    begin_line = iterate_xsf(lines)  # BEGIN_DATAGRID_[N]D[name]
+    while !startswith(begin_line, "END_BLOCK_DATAGRID_$(N)D")
+        expectation = "BEGIN_DATAGRID_$(N)D"
+        startswith(begin_line, expectation) || error(
+            "Expected the beginning of a data block $(expectation), got $(begin_line)"
+        )
+        name = begin_line[length(expectation) + 1:end]
+        data = parse_data_grid(T, lines, N)
+        push!(data_grids, (; name, data))
+        begin_line = iterate_xsf(lines)
+    end
+    return (; identifier, data_grids)
+end
+
 # Parse an arbitrary block from a periodic file
 # Supported keywords are PRIMVEC, CONVVEC, PRIMCOORD, and CONVCOORD, i.e.
 # DATAGRID_[2,3]D blocks are not (yet) supported
@@ -110,6 +157,10 @@ function parse_xsf_block(T::Type{<:Real}, keyword, lines)
         return parse_vec_block(T, lines)
     elseif keyword in ("PRIMCOORD", "CONVCOORD")
         return parse_coord_block(T, lines)
+    elseif startswith(keyword, "BEGIN_BLOCK_DATAGRID")
+        N = parse(Int, keyword[end - 1])  # e.g. "BEGIN_BLOCK_DATAGRID_2D" -> 2
+        N in (2, 3) || error("Invalid datagrid dimension $(N), only (2, 3) are supported.")
+        return parse_data_grid_block(T, lines, N)
     else
         error("Unknown keyword $(keyword)")
     end
@@ -145,7 +196,7 @@ function parse_periodic_frame(T::Type{<:Real}, lines, bcs, previous_frame)
             seek(lines.stream, io_pos)
         end
     end
-    @assert haskey(blocks, "PRIMCOORD") "Found no PRIMCOORD block in the current frame"
+    haskey(blocks, "PRIMCOORD") || error("Found no PRIMCOORD block in the current frame")
     if !haskey(blocks, "PRIMVEC")
         if !isnothing(previous_frame)
             blocks["PRIMVEC"] = bounding_box(previous_frame)
@@ -202,7 +253,14 @@ function load_xsf(T::Type{<:Real}, file::Union{AbstractString,IOStream})
             push!(frames, parse_periodic_frame(T, lines, bcs, previous_frame))
         end
     end
-    return frames
+    # Parse any data grids
+    line = iterate_xsf(lines)
+    datagrids = []
+    while !isnothing(line)
+        push!(datagrids, parse_xsf_block(T, line, lines))
+        line = iterate_xsf(lines)
+    end
+    return frames, datagrids
 end
 # Set a default floating-point type of Float64
 load_xsf(file::Union{AbstractString,IOStream}) = load_xsf(Float64, file)
