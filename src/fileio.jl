@@ -1,40 +1,37 @@
 const KNOWN_PERIODIC_KEYWORDS = ("PRIMVEC", "CONVVEC", "PRIMCOORD", "CONVCOORD")
 
 # Count the number of boundary conditions which are AtomsBase.Periodic
-function count_periodic_bcs(bcs::AbstractVector{<:BoundaryCondition})
-    return count(Base.Fix2(isa, Periodic), bcs)
-end
-count_periodic_bcs(system::AbstractSystem) = count_periodic_bcs(boundary_conditions(system))
+count_periodic_bcs(system::AbstractSystem) = count(periodicity(system))
 
 function check_system_properties(system::AbstractSystem)
     system_keys = keys(system)
     for key in system_keys
-        if !in(key, (:bounding_box, :boundary_conditions,))
+        if !in(key, (:bounding_box, :periodicity, ))
             @warn "Ignoring unsupported property $(key)"
         end
     end
 end
 
-function check_atom_properties(atom::Atom)
+function check_atom_properties(atom)
     atom_keys = keys(atom)
     for key in atom_keys
-        if !in(key, (:atomic_symbol, :atomic_number, :atomic_mass, :position, :force,))
+        if !in(key, (:species, :mass, :position, :force,))
             @warn "Ignoring unsupported atomic property $(key)"
         end
     end
 end
 
-function check_atomic_mass(atom::Atom)
+function check_atomic_mass(atom)
     if haskey(PeriodicTable.elements, atomic_symbol(atom))
-        if atomic_mass(atom) != PeriodicTable.elements[atomic_symbol(atom)].atomic_mass
-            @warn "Atom atomic_mass in XSF cannot be mutated"
+        if mass(atom) != PeriodicTable.elements[atomic_symbol(atom)].atomic_mass
+            @warn "Atom mass in XSF cannot be mutated."
         end
     end
 end
 
-function check_atomic_symbol(atom::Atom)
-    if atomic_symbol(atom) != Symbol(PeriodicTable.elements[atomic_number(atom)].symbol)
-        @warn "Atom atomic_symbol in XSF must agree with atomic_mass"
+function check_atomic_symbol(atom)
+    if atomic_symbol(atom) != Symbol(element(species(atom)).symbol)
+        @warn "Atom atomic_symbol in XSF must agree with atomic number"
     end
 end
 
@@ -61,10 +58,10 @@ end
 # mentioned in the ase.io parser nor in any of the examples, so it is not
 # implemented here
 function parse_boundary_conditions(line)
-    occursin("ATOMS", line) && return [DirichletZero(), DirichletZero(), DirichletZero()]
-    occursin("POLYMER", line) && return [Periodic(), DirichletZero(), DirichletZero()]
-    occursin("SLAB", line) && return [Periodic(), Periodic(), DirichletZero()]
-    occursin("CRYSTAL", line) && return [Periodic(), Periodic(), Periodic()]
+    occursin("ATOMS", line)   && return (false, false, false)
+    occursin("POLYMER", line) && return (true,  false, false)
+    occursin("SLAB", line)    && return (true,   true, false)
+    occursin("CRYSTAL", line) && return (true,   true,  true)
     return error("Unknown structure type $(line)")
 end
 
@@ -81,14 +78,13 @@ end
 # atomic_number x y z Fx Fy Fz
 function parse_coord_line(T::Type{<:Real}, line)
     words = split(line)
-    number = parse(Int, words[1])
-    atomic_symbol = Symbol(PeriodicTable.elements[number].symbol)
+    species = ChemicalSpecies(parse(Int, words[1]))
     position = parse.(T, words[2:4]) .* LENGTH_UNIT
     if length(words) == 7
         force = parse.(T, words[5:7]) .* FORCE_UNIT
-        return Atom(; atomic_symbol, position, force=force)
+        return Atom(; species, position, force=force)
     else
-        return Atom(; atomic_symbol, position)
+        return Atom(; species, position)
     end
 end
 
@@ -121,7 +117,7 @@ end
 # Following frames will have at least PRIMCOORD (PRIMVEC and others are optional)
 # If a frame doesn't have PRIMVEC, the bounding box (PRIMVEC) from the previous frame needs
 # to be brought forward
-function parse_periodic_frame(T::Type{<:Real}, lines, bcs, previous_frame)
+function parse_periodic_frame(T::Type{<:Real}, lines, pbcs, previous_frame)
     should_parse = true
     i = 0
     io_pos = position(lines.stream)
@@ -153,7 +149,7 @@ function parse_periodic_frame(T::Type{<:Real}, lines, bcs, previous_frame)
             error("Found no PRIMVEC block in the current frame and have no previous frame")
         end
     end
-    return atomic_system(blocks["PRIMCOORD"], blocks["PRIMVEC"], bcs)
+    return FlexibleSystem(blocks["PRIMCOORD"], blocks["PRIMVEC"], pbcs)
 end
 
 # Parse a frame (ANIMSTEP in XSF lingo) from a non-periodic file (ATOMS)
@@ -166,7 +162,7 @@ function parse_atoms_frame(T::Type{<:Real}, lines)
         push!(atoms, atom)
         line = iterate_xsf(lines)
     end
-    return isolated_system(atoms)
+    return FlexibleSystem(atoms, IsolatedCell(3))
 end
 
 # Load all the frames from an XSF file
@@ -182,24 +178,19 @@ function load_xsf(T::Type{<:Real}, file::Union{AbstractString,IOStream})
     else
         n_frames = 1
     end
-    bcs = BoundaryCondition[]
-    try
-        bcs = parse_boundary_conditions(line)
-    catch
-        return []
-    end
+    pbcs = parse_boundary_conditions(line)
     frames = AbstractSystem{3}[]
     for _ in 1:n_frames
         # Check how many boundary conditions are Periodic to determine whether we have
         # ATOMS or one of POLYMER, SLAB, CRYSTAL
-        if count(Base.Fix2(isa, AtomsBase.Periodic), bcs) == 0
+        if !any(pbcs)  # no periodic BCs
             push!(frames, parse_atoms_frame(T, lines))
         else
             # We need to pass the previous frame because if the unit cell is fixed,
             # it is written only in the first frame and we need to pass it through
             # frame-by-frame
             previous_frame = isempty(frames) ? nothing : last(frames)
-            push!(frames, parse_periodic_frame(T, lines, bcs, previous_frame))
+            push!(frames, parse_periodic_frame(T, lines, pbcs, previous_frame))
         end
     end
     return frames
@@ -268,9 +259,9 @@ function save_xsf(io::IO, frames::AbstractVector{<:AbstractSystem})
     check_system.(frames)
     # Make sure all structures have the same boundary conditions and get those boundary
     # conditions.
-    bcs = only(unique(boundary_conditions.(frames)))
+    pbcs = only(unique(periodicity.(frames)))
     # Count the number of periodic boundary conditions.
-    n_periodic_bcs = count(Base.Fix2(isa, Periodic), bcs)
+    n_periodic_bcs = count(pbcs)
     # Write the animation line if more than one frame is provided.
     is_animated = length(frames) > 1
     is_animated && println(io, "ANIMSTEPS $(length(frames))")
