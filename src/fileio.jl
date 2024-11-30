@@ -6,7 +6,7 @@ count_periodic_bcs(system::AbstractSystem) = count(periodicity(system))
 function check_system_properties(system::AbstractSystem)
     system_keys = keys(system)
     for key in system_keys
-        if !in(key, (:bounding_box, :periodicity, ))
+        if !in(key, (:cell_vectors, :periodicity, ))
             @warn "Ignoring unsupported property $(key)"
         end
     end
@@ -144,7 +144,7 @@ function parse_periodic_frame(T::Type{<:Real}, lines, pbcs, previous_frame)
     @assert haskey(blocks, "PRIMCOORD") "Found no PRIMCOORD block in the current frame"
     if !haskey(blocks, "PRIMVEC")
         if !isnothing(previous_frame)
-            blocks["PRIMVEC"] = bounding_box(previous_frame)
+            blocks["PRIMVEC"] = cell_vectors(previous_frame)
         else
             error("Found no PRIMVEC block in the current frame and have no previous frame")
         end
@@ -223,10 +223,10 @@ function write_atoms(io::IO, system::AbstractSystem; header="")
 end
 
 # Write a bounding box block (optionally with a header, i.e. PRIMVEC or CONVVEC)
-function write_bounding_box(io::IO, system::AbstractSystem; header="")
+function write_cell_vectors(io::IO, system::AbstractSystem; header="")
     !isempty(header) && println(io, strip(header))
     for i in 1:3
-        x, y, z = ustrip.(uconvert.(LENGTH_UNIT, bounding_box(system)[i]))
+        x, y, z = ustrip.(uconvert.(LENGTH_UNIT, cell_vectors(system)[i]))
         println(io, "$(x) $(y) $(z)")
     end
     return nothing
@@ -236,8 +236,8 @@ end
 # periodic trajectory
 function write_periodic_frame(io::IO, system::AbstractSystem; frame="")
     n_atoms = length(system)
-    write_bounding_box(io, system; header="PRIMVEC $(frame)")
-    write_bounding_box(io, system; header="CONVVEC $(frame)")
+    write_cell_vectors(io, system; header="PRIMVEC $(frame)")
+    write_cell_vectors(io, system; header="CONVVEC $(frame)")
     write_atoms(io, system; header="PRIMCOORD $(frame)\n$(n_atoms) 1")
     return nothing
 end
